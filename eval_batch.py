@@ -13,6 +13,8 @@ model = joblib.load('reimbursement_model.pkl')
 # Prepare input features and expected outputs
 inputs = []
 expected_outputs = []
+bins = [0, 100, 500, 1000, float('inf')]
+labels = ['low', 'medium', 'high', 'very_high']
 for case in cases:
     trip_duration = float(case['input']['trip_duration_days'])
     miles = float(case['input']['miles_traveled'])
@@ -21,15 +23,46 @@ for case in cases:
     daily_receipts = receipts / trip_duration
     receipt_cents = int((receipts % 1) * 100)
     is_5_days = 1 if trip_duration == 5 else 0
+    is_49_cents = 1 if receipt_cents == 49 else 0
+    is_50_cents = 1 if receipt_cents == 50 else 0
+    is_49_or_50_cents = 1 if receipt_cents in [49, 50] else 0
+    is_high_receipt = 1 if receipts > 500 else 0  # Adjust threshold if needed
+    efficiency_bonus = 1 if 180 <= miles_per_day <= 220 else 0
+    low_receipt_flag = 1 if receipts < 50 else 0
+    mileage_tier = pd.cut([miles], bins=bins, labels=labels)[0]
+    mileage_tier_medium = 1 if mileage_tier == 'medium' else 0
+    mileage_tier_high = 1 if mileage_tier == 'high' else 0
+    mileage_tier_very_high = 1 if mileage_tier == 'very_high' else 0
+    mileage_49_interaction = miles * is_49_cents
+    miles_capped = min(miles, 5000)
+    receipts_capped = min(receipts, 1000)
+    log_total_receipts_amount = np.log1p(receipts)
+    log_miles_traveled = np.log1p(miles)
     inputs.append([
-        trip_duration, miles, receipts, miles_per_day, daily_receipts, receipt_cents, is_5_days
+        trip_duration, miles, receipts, miles_per_day, daily_receipts, receipt_cents, is_5_days,
+        is_49_cents, is_49_or_50_cents, is_high_receipt, efficiency_bonus, low_receipt_flag,
+        mileage_49_interaction, mileage_tier_medium, mileage_tier_high, mileage_tier_very_high,
+        miles_capped, receipts_capped, log_total_receipts_amount, log_miles_traveled
     ])
     expected_outputs.append(float(case['expected_output']))
 
-X = pd.DataFrame(inputs, columns=[
-    'trip_duration_days', 'miles_traveled', 'total_receipts_amount',
-    'miles_per_day', 'daily_receipts', 'receipt_cents', 'is_5_days'])
+columns = [
+    'trip_duration_days', 'miles_traveled', 'total_receipts_amount', 'miles_per_day',
+    'daily_receipts', 'receipt_cents', 'is_5_days', 'is_49_cents', 'is_49_or_50_cents',
+    'is_high_receipt', 'efficiency_bonus', 'low_receipt_flag', 'mileage_49_interaction',
+    'mileage_tier_medium', 'mileage_tier_high', 'mileage_tier_very_high', 'miles_capped',
+    'receipts_capped', 'log_total_receipts_amount', 'log_miles_traveled'
+]
+X = pd.DataFrame(inputs, columns=columns)
 y_true = np.array(expected_outputs)
+
+# Load feature column order from training
+try:
+    feature_columns = joblib.load('feature_columns.pkl')
+    X = X.reindex(columns=feature_columns, fill_value=0)
+except Exception as e:
+    print(f"Warning: Could not load feature_columns.pkl: {e}")
+    # Fallback: use X as is
 
 # Predict all at once
 preds = model.predict(X)
